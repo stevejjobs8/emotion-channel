@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>밤의 채널</title>
+<meta name="description" content="켜 두기만 하면 4K 영상과 음악이 끝없이 흐르는 감성 채널">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nanum+Myeongjo:wght@700;800&family=IBM+Plex+Sans+KR:wght@300&display=swap">
+<style>
+/* 화면 전체가 영상. 보이는 것은 처음의 문 하나와, 영상이 바뀔 때 잠깐 비치는 출처 한 줄뿐. */
+:root {
+  --night: #05060a;
+  --ink: #f1eee8;
+  --dim: rgba(241, 238, 232, .55);
+  --font-line: "Nanum Myeongjo", "Noto Serif KR", serif;
+  --font-ui: "IBM Plex Sans KR", "Apple SD Gothic Neo", system-ui, sans-serif;
+  color-scheme: dark;
+}
+[hidden] { display: none !important; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--night); color: var(--ink); overflow: hidden; font-family: var(--font-ui); -webkit-user-select: none; user-select: none; }
+body.idle { cursor: none; }
+video, iframe { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; }
+video { object-fit: cover; opacity: 0; transition: opacity 3.5s ease; background: var(--night); }
+video.on { opacity: 1; }
+.shade { position: fixed; inset: 0; pointer-events: none; background: radial-gradient(ellipse at center, transparent 55%, rgba(0, 0, 0, .35)); }
+.credit {
+  position: fixed; right: max(18px, env(safe-area-inset-right, 0px)); bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  font-size: 11px; letter-spacing: .06em; color: var(--dim); opacity: 0; transition: opacity 1.5s ease;
+}
+.credit.on { opacity: 1; }
+.credit a { color: inherit; text-decoration: none; }
+.door {
+  position: fixed; inset: 0; z-index: 3; display: grid; place-items: center; cursor: pointer;
+  width: 100%; border: 0; color: inherit; font: inherit;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  background: radial-gradient(ellipse at center, #121524 0%, var(--night) 75%);
+  transition: opacity 2s ease;
+}
+.door:focus-visible { outline: 2px solid var(--dim); outline-offset: -8px; }
+.door-in { display: grid; gap: 18px; justify-items: center; text-align: center; }
+.door h1 { margin: 0; font-family: var(--font-line); font-weight: 800; font-size: clamp(40px, 8vw, 84px); letter-spacing: -0.02em; }
+.door p { margin: 0; font-size: 13px; letter-spacing: .2em; color: var(--dim); }
+</style>
+
+<video id="v0" muted playsinline preload="auto"></video>
+<video id="v1" muted playsinline preload="auto"></video>
+<div class="shade"></div>
+<div class="credit" id="credit"></div>
+<button class="door" id="door" type="button">
+  <span class="door-in">
+    <h1>밤의 채널</h1>
+    <p>화면을 한 번 누르면 시작돼요 · 소리와 함께</p>
+  </span>
+</button>
+<audio id="a0" preload="auto"></audio>
+<audio id="a1" preload="auto"></audio>
+
+<script>
+(async () => {
+  const CLIP_MIN = 22, CLIP_MAX = 40;   // 한 장면을 보여 주는 시간(초)
+  const XFADE_VIDEO = 3.5, XFADE_AUDIO = 6;
+
+  const load = async (url, fallback) => { try { const r = await fetch(url, { cache: 'no-cache' }); return r.ok ? await r.json() : fallback; } catch (e) { return fallback; } };
+  const [playlist, music] = await Promise.all([load('playlist.json', { clips: [] }), load('music/manifest.json', { tracks: [] })]);
+  const clips = playlist.clips || [], tracks = music.tracks || [];
+
+  // 영상이 아직 하나도 없으면 실시간 생성 장면으로 대신한다.
+  if (!clips.length) { location.replace('ambient.html'); return; }
+
+  const shuffle = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; [a[i], a[j]] = [a[j], a[i]]; } return a; };
+
+  // 같은 분위기끼리 몇 개씩 묶어 흐르게 하되, 분위기 순서는 매번 섞는다.
+  function* clipStream() {
+    while (true) {
+      const byMood = {};
+      for (const c of clips) (byMood[c.mood] = byMood[c.mood] || []).push(c);
+      for (const mood of shuffle(Object.keys(byMood))) {
+        for (const c of shuffle(byMood[mood]).slice(0, 2 + ((Math.random() * 3) | 0))) yield c;
+      }
+    }
+  }
+  const stream = clipStream();
+
+  // 화면 크기에 맞는 가장 선명한 파일을 고른다. 큰 화면이면 4K.
+  const want = Math.max(screen.width, screen.height) * Math.min(devicePixelRatio || 1, 2);
+  function pickFile(c) {
+    const files = c.files.slice().sort((a, b) => a.width - b.width);
+    return (files.find(f => f.width >= want * 0.9) || files[files.length - 1]).link;
+  }
+
+  const vids = [document.getElementById('v0'), document.getElementById('v1')];
+  const creditEl = document.getElementById('credit');
+  let front = 0, nextClip = null;
+
+  function prepare(v) {
+    nextClip = stream.next().value;
+    v.src = pickFile(nextClip);
+    v.load();
+  }
+  function showCredit(c) {
+    creditEl.innerHTML = '';
+    const a = document.createElement('a');
+    a.href = c.url; a.target = '_blank'; a.rel = 'noopener';
+    a.textContent = `${c.author} · ${c.provider || 'Pexels'}`;
+    creditEl.appendChild(a);
+    creditEl.classList.add('on');
+    setTimeout(() => creditEl.classList.remove('on'), 5000);
+  }
+  async function cut() {
+    const back = 1 - front, v = vids[back], c = nextClip;
+    try { v.currentTime = 0; await v.play(); } catch (e) { prepare(v); return setTimeout(cut, 1500); }
+    v.classList.add('on'); vids[front].classList.remove('on');
+    showCredit(c);
+    const old = vids[front];
+    front = back;
+    setTimeout(() => { old.pause(); prepare(old); }, XFADE_VIDEO * 1000 + 200);
+    // 영상이 짧으면 끝나기 전에 넘긴다
+    const len = isFinite(v.duration) ? v.duration : CLIP_MAX;
+    const hold = Math.min(CLIP_MIN + Math.random() * (CLIP_MAX - CLIP_MIN), Math.max(6, len - XFADE_VIDEO - 0.5));
+    setTimeout(cut, hold * 1000);
+  }
+  vids.forEach(v => { v.loop = true; v.addEventListener('error', () => { if (!v.classList.contains('on')) prepare(v); }); });
+
+  // ---------- 음악: 곡과 곡 사이를 길게 겹쳐 끊김 없이 ----------
+  const auds = [document.getElementById('a0'), document.getElementById('a1')];
+  let aFront = 0, trackQueue = [];
+  const nextTrack = () => { if (!trackQueue.length) trackQueue = shuffle(tracks); return 'music/' + trackQueue.pop(); };
+  function fade(el, to, secs) {
+    const from = el.volume, t0 = performance.now();
+    const step = () => { const k = Math.min(1, (performance.now() - t0) / (secs * 1000)); el.volume = from + (to - from) * k; if (k < 1) requestAnimationFrame(step); else if (to === 0) el.pause(); };
+    step();
+  }
+  function playTrack() {
+    const el = auds[aFront];
+    el.src = nextTrack(); el.volume = 0;
+    el.play().then(() => fade(el, 1, XFADE_AUDIO)).catch(() => {});
+    el.ontimeupdate = () => {
+      if (el.duration && el.duration - el.currentTime < XFADE_AUDIO && !el.dataset.leaving) {
+        el.dataset.leaving = '1'; fade(el, 0, XFADE_AUDIO);
+        aFront = 1 - aFront; playTrack();
+      }
+    };
+    el.onplay = () => { delete el.dataset.leaving; };
+    el.onerror = () => { aFront = 1 - aFront; setTimeout(playTrack, 500); };
+  }
+
+  // ---------- 시작 ----------
+  prepare(vids[1]);
+  const door = document.getElementById('door');
+  door.addEventListener('click', () => {
+    door.style.opacity = 0; setTimeout(() => door.hidden = true, 2000);
+    cut();
+    if (tracks.length) playTrack();
+    try { navigator.wakeLock && navigator.wakeLock.request('screen').catch(() => {}); } catch (e) {}
+  }, { once: true });
+
+  addEventListener('dblclick', () => {
+    try { document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen().catch(() => {}); } catch (e) {}
+  });
+  let idleTimer; addEventListener('pointermove', () => { document.body.classList.remove('idle'); clearTimeout(idleTimer); idleTimer = setTimeout(() => document.body.classList.add('idle'), 2000); });
+})();
+</script>
+</html>

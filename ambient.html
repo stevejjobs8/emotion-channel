@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>밤의 채널</title>
+
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nanum+Myeongjo:wght@700;800&family=IBM+Plex+Sans+KR:wght@300&display=swap">
+<style>
+/* 화면 전체가 장면. 글자는 드롭 순간 한 줄만. 의도적으로 어두운 단일 테마. */
+:root {
+  --night: #05060a;
+  --ink: #f1eee8;
+  --dim: rgba(241, 238, 232, .55);
+  --font-line: "Nanum Myeongjo", "Noto Serif KR", serif;
+  --font-ui: "IBM Plex Sans KR", "Apple SD Gothic Neo", system-ui, sans-serif;
+  color-scheme: dark;
+}
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body { background: var(--night); color: var(--ink); overflow: hidden; font-family: var(--font-ui); -webkit-user-select: none; user-select: none; }
+body.idle { cursor: none; }
+canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+.line {
+  position: fixed; inset: auto 0 calc(9vh + env(safe-area-inset-bottom, 0px)); display: grid; place-items: center; pointer-events: none; text-align: center;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.line span {
+  font-family: var(--font-line); font-weight: 700; font-size: clamp(17px, 2vw, 24px);
+  line-height: 1.5; letter-spacing: -0.01em; max-width: 26ch; text-wrap: balance;
+  text-shadow: 0 0 30px rgba(0, 0, 0, .55);
+  opacity: 0; filter: blur(6px); transform: translateY(8px);
+  transition: opacity 2.4s ease, filter 2.4s ease, transform 2.4s ease;
+}
+.line span.on { opacity: 1; filter: none; transform: none; }
+.door {
+  position: fixed; inset: 0; display: grid; place-items: center; cursor: pointer; z-index: 3;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  background: radial-gradient(ellipse at center, rgba(5, 6, 10, .15), rgba(5, 6, 10, .6));
+  transition: opacity 2s ease; border: 0; width: 100%; color: inherit; font: inherit;
+}
+.door:focus-visible { outline: 2px solid var(--dim); outline-offset: -8px; }
+.door-in { display: grid; gap: 18px; justify-items: center; text-align: center; }
+.door h1 { margin: 0; font-family: var(--font-line); font-weight: 800; font-size: clamp(40px, 8vw, 84px); letter-spacing: -0.02em; }
+.door p { margin: 0; font-size: 13px; letter-spacing: .2em; color: var(--dim); }
+.fail { position: fixed; inset: 0; display: grid; place-items: center; text-align: center; padding: 24px max(16px, env(safe-area-inset-left, 0px)); color: var(--dim); line-height: 1.8; }
+</style>
+
+<canvas id="c"></canvas>
+<div class="line"><span id="line"></span></div>
+<button class="door" id="door" type="button">
+  <span class="door-in">
+    <h1>밤의 채널</h1>
+    <p>화면을 한 번 누르면 시작돼요 · 소리와 함께</p>
+  </span>
+</button>
+<div class="fail" id="fail" hidden>이 기기에서는 장면을 그릴 수 없어요.<br>다른 브라우저에서 열어 주세요.</div>
+
+<script id="fs" type="x-shader/x-fragment">
+precision highp float;
+uniform vec2 R; uniform float T;
+uniform float SA, SB, MX, EA, EB, FL, DK;
+uniform vec3 QA, QB;
+
+float h(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float n(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.-2.*f);
+  return mix(mix(h(i), h(i+vec2(1,0)), f.x), mix(h(i+vec2(0,1)), h(i+vec2(1,1)), f.x), f.y); }
+float fbm(vec2 p){ float v = 0., a = .5; mat2 m = mat2(1.6, 1.2, -1.2, 1.6);
+  for(int i = 0; i < 5; i++){ v += a*n(p); p = m*p; a *= .5; } return v; }
+float stars(vec2 uv, float dens){
+  vec2 g = uv*dens, i = floor(g), f = fract(g);
+  float r = h(i); vec2 c = vec2(h(i+.31), h(i+.77));
+  float d = length(f - c);
+  float px = dens / R.y * 1.2;           // 한 픽셀 폭: 어떤 해상도에서도 별이 날카롭게
+  float s = smoothstep(px + .03*r, 0., d) * step(.86, r);
+  return s * (.55 + .45*sin(T*(1.5 + r*2.) + r*40.));
+}
+
+// 1. 오로라 아래 설산
+vec3 aurora(vec2 p, vec3 q, float e){
+  vec3 col = mix(vec3(.005,.012,.03), vec3(.01,.04,.07), clamp(p.y + .5, 0., 1.));
+  col += stars(p + q.xy, 80.)*.9 + stars(p*1.6 + q.yx, 170.)*.45;
+  for(int i = 0; i < 4; i++){
+    float fi = float(i);
+    float base = .02 + fi*.06 + .14*fbm(vec2(p.x*.9 + fi*3.1 + q.z*9., T*.04 + fi));
+    float above = p.y - base;
+    float curtain = exp(-max(above, 0.)*(5. + fi)) * smoothstep(-.015, .01, above);
+    float rays = .35 + .65*fbm(vec2(p.x*14. + fi*7. + T*.08, T*.2 + fi));
+    vec3 c = mix(vec3(.15, 1., .55), vec3(.55, .3, 1.), clamp(fi/3. + (q.x - .5)*.6, 0., 1.));
+    col += c * curtain * rays * (.12 + e*.75);
+  }
+  float m = -.22 + .1*fbm(vec2(p.x*1.6 + q.y*20., 3.)) - .05*abs(sin(p.x*2.3 + q.z*6.));
+  float snow = smoothstep(.0, .05, p.y - m + .07) * .06;
+  vec3 hill = vec3(.004, .007, .014) + snow*vec3(.4, .7, .9)*(.3 + e);
+  return mix(col, hill, smoothstep(m + .002, m - .002, p.y));
+}
+
+// 2. 수평선 위의 해
+vec3 sea(vec2 p, vec3 q, float e){
+  float hz = -.06;
+  vec3 warm = mix(vec3(1., .5, .3), vec3(1., .38, .55), q.x);
+  vec3 sky = mix(warm, vec3(.14, .1, .32), clamp((p.y - hz)*2.4, 0., 1.));
+  sky = mix(sky, vec3(.02, .025, .08), clamp((p.y - hz - .28)*1.8, 0., 1.));
+  sky *= .45 + e*.75;
+  vec2 sp = vec2((q.y - .5)*.6, -.2 + e*.3);
+  float d = length(p - sp);
+  sky += vec3(1., .8, .55) * (smoothstep(.062, .058, d)*1.6 + .3*exp(-d*7.)*(.4 + e));
+  sky += stars(p + q.xy, 120.)*smoothstep(.1, .45, p.y)*(1. - e*.6);
+  float cl = fbm(vec2(p.x*2.5 + T*.01 + q.z*10., p.y*9.));
+  sky = mix(sky, sky*.6 + warm*.18*(.4 + e), smoothstep(.55, .8, cl)*smoothstep(.0, .2, p.y - hz)*.7);
+  if(p.y < hz){
+    float depth = hz - p.y;
+    vec2 w = vec2(p.x/(depth + .015)*.25, .25/(depth + .015) + T*.5);
+    float wave = fbm(w*vec2(1.5, .6) + T*.07);
+    float path = exp(-abs(p.x - sp.x)*(5. + depth*14.)) * smoothstep(.42, .78, wave);
+    vec3 water = mix(vec3(.01, .015, .04), sky*.4, exp(-depth*7.));
+    sky = water + vec3(1., .72, .45)*path*(.3 + e*1.4) + .03*wave;
+  }
+  return sky;
+}
+
+// 3. 성운
+vec3 nebula(vec2 p, vec3 q, float e){
+  float a = T*.012; p = mat2(cos(a), -sin(a), sin(a), cos(a)) * p;
+  vec2 w = vec2(fbm(p*1.4 + q.xy*10.), fbm(p*1.4 + q.yz*10. + 5.2));
+  float f = fbm(p*1.7 + w*2.2 + T*.015);
+  vec3 c1 = .5 + .5*cos(6.283*(q.x + vec3(0., .33, .67)));
+  vec3 c2 = .5 + .5*cos(6.283*(q.z + vec3(.1, .45, .8)));
+  vec3 col = mix(c1, c2, w.x) * pow(f, 3.2) * (1. + e*2.);
+  col += vec3(1., .92, .82) * exp(-length(p)*(6. - e*3.)) * (.15 + e*.9);
+  col += stars(p + q.zx, 60.)*1.2 + stars(p*2.2 + q.xy, 190.)*.5;
+  return col;
+}
+
+// 4. 비 오는 도시의 불빛
+vec3 city(vec2 p, vec3 q, float e){
+  vec3 col = mix(vec3(.02, .015, .035), vec3(.07, .03, .08), clamp(p.y + .5, 0., 1.));
+  for(int L = 0; L < 3; L++){
+    float fl = float(L), sc = 3. + fl*2.6;
+    vec2 g = p*sc + vec2(T*.025*(fl + 1.) + q.x*10. + fl*7., q.y*5.);
+    vec2 i = floor(g), f = fract(g);
+    float r = h(i + fl*13.);
+    vec2 c = vec2(.2 + .6*h(i + .1), .2 + .6*h(i + .2));
+    float rad = .16 + .24*h(i + .3);
+    float d = length(f - c);
+    float edge = .012 + fl*.035;
+    float disc = smoothstep(rad, rad - edge, d) * (.55 + .45*smoothstep(rad*.4, rad, d));
+    vec3 bc = .55 + .45*cos(6.283*(r*.35 + q.z + vec3(0., .12, .28)));
+    float pulse = .6 + .4*sin(T*.6 + r*30.);
+    col += bc * disc * step(.4, r) * (.1 + .16*pulse) * (.5 + e*1.4) / (1. + fl*.4);
+  }
+  vec2 rp = vec2(p.x*90. + q.x*50., p.y*3. + T*2.4);
+  float rs = h(vec2(floor(rp.x), 1.));
+  float st = fract(rp.y + rs*10.);
+  col += vec3(.6, .7, .95) * smoothstep(.965, 1., st) * step(.72, rs) * (.12 + e*.15);
+  return col;
+}
+
+vec3 scene(float id, vec2 p, vec3 q, float e){
+  if(id < .5) return aurora(p, q, e);
+  if(id < 1.5) return sea(p, q, e);
+  if(id < 2.5) return nebula(p, q, e);
+  return city(p, q, e);
+}
+
+void main(){
+  vec2 p = (gl_FragCoord.xy - .5*R) / R.y;
+  vec3 col = scene(SA, p, QA, EA);
+  if(MX > .001) col = mix(col, scene(SB, p, QB, EB), MX);
+  col += vec3(1., .94, .84) * FL * exp(-dot(p, p)*1.5);
+  col *= 1. - DK;
+  col = 1. - exp(-col*1.5);
+  col *= 1. - .3*dot(p, p);
+  col += (h(gl_FragCoord.xy + fract(T*7.)) - .5) / 255.;
+  gl_FragColor = vec4(col, 1.);
+}
+</script>
+
+<script>
+(() => {
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const cv = document.getElementById('c');
+  const gl = cv.getContext('webgl', { antialias: false, alpha: false, powerPreference: 'high-performance' });
+  if (!gl) { document.getElementById('fail').hidden = false; document.getElementById('door').hidden = true; return; }
+
+  // ---------- GL ----------
+  function sh(type, src) { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; }
+  const prog = gl.createProgram();
+  gl.attachShader(prog, sh(gl.VERTEX_SHADER, 'attribute vec2 a;void main(){gl_Position=vec4(a,0.,1.);}'));
+  gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, document.getElementById('fs').textContent));
+  gl.linkProgram(prog); gl.useProgram(prog);
+  gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  const U = {}; ['R', 'T', 'SA', 'SB', 'MX', 'EA', 'EB', 'FL', 'DK', 'QA', 'QB'].forEach(k => U[k] = gl.getUniformLocation(prog, k));
+
+  // 기기 해상도 그대로 그린다. 프레임이 버거울 때만 한 단계씩 낮춘다.
+  let scale = Math.min(devicePixelRatio || 1, 2);
+  function size() { cv.width = Math.round(innerWidth * scale); cv.height = Math.round(innerHeight * scale); gl.viewport(0, 0, cv.width, cv.height); }
+  size(); addEventListener('resize', size);
+
+  // ---------- 장면 목록과 화음 ----------
+  const SCENES = [
+    { pad: [110, 164.81, 196, 246.94, 261.63], bells: [440, 523.25, 587.33, 659.25, 783.99, 880, 1046.5] },        // 오로라 · A단조
+    { pad: [146.83, 220, 329.63, 369.99, 440], bells: [587.33, 659.25, 739.99, 880, 987.77, 1174.66, 1318.5] },   // 바다 · D장조
+    { pad: [155.56, 233.08, 293.66, 349.23, 440], bells: [622.25, 698.46, 783.99, 880, 932.33, 1244.5, 1396.9] }, // 성운 · E♭리디안
+    { pad: [87.31, 130.81, 164.81, 220, 392], bells: [698.46, 783.99, 880, 1046.5, 1174.66, 1396.9, 1567.98] },   // 도시 · F장7
+  ];
+  const LINES = [
+    '오늘도 여기까지 잘 왔어요', '아무 말 안 해도 괜찮아요', '지금 이 순간은 온전히 당신 거예요',
+    '멀리 있어도 같은 하늘 아래예요', '이 밤도 결국 지나가요', '숨을 한 번, 길게 쉬어 봐요',
+    '언젠가 오늘이 그리워질 거예요', '당신은 생각보다 훨씬 넓은 사람이에요', '천천히 가도 괜찮아요',
+    '누군가 지금 당신을 떠올리고 있어요', '빛은 늘 어둠 끝에 와요', '애쓰지 않아도 되는 시간이에요',
+  ];
+  let linePool = [];
+  function nextLine() { if (!linePool.length) linePool = LINES.slice().sort(() => Math.random() - .5); return linePool.pop(); }
+  let lastScene = -1;
+  function makeScene(start) {
+    let id; do { id = (Math.random() * SCENES.length) | 0; } while (id === lastScene);
+    lastScene = id;
+    const dur = 80 + Math.random() * 30;
+    return { id, start, dur, dropT: dur * (0.55 + Math.random() * 0.08), q: [Math.random(), Math.random(), Math.random()],
+      dropped: false, silenced: false, crossing: false, E: 0.12 };
+  }
+
+  // ---------- 소리 ----------
+  let A = null;
+  function audioInit() {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const master = ctx.createGain(); master.gain.value = 0;
+    master.gain.setTargetAtTime(0.85, ctx.currentTime, 1.5);
+    const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -16; comp.ratio.value = 4;
+    master.connect(comp).connect(ctx.destination);
+    // 공간감: 짧은 노이즈 임펄스로 만든 리버브
+    const len = ctx.sampleRate * 3.5, ir = ctx.createBuffer(2, len, ctx.sampleRate);
+    for (let c = 0; c < 2; c++) { const d = ir.getChannelData(c); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.6); }
+    const verb = ctx.createConvolver(); verb.buffer = ir;
+    const verbG = ctx.createGain(); verbG.gain.value = 0.55; verb.connect(verbG).connect(master);
+    const bus = ctx.createGain(); bus.connect(master); bus.connect(verb);
+    // 라이저
+    const nb = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate), nd = nb.getChannelData(0);
+    for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
+    const noise = ctx.createBufferSource(); noise.buffer = nb; noise.loop = true;
+    const riseF = ctx.createBiquadFilter(); riseF.type = 'bandpass'; riseF.Q.value = 1.4;
+    const riseG = ctx.createGain(); riseG.gain.value = 0;
+    noise.connect(riseF).connect(riseG).connect(bus); noise.start();
+    A = { ctx, master, bus, riseF, riseG, pad: null, nextBeat: 0, nextBell: 0, bellRate: 0 };
+  }
+  function makePad(chord) {
+    const { ctx, bus } = A, t = ctx.currentTime;
+    const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 400; f.Q.value = 0.7;
+    const g = ctx.createGain(); g.gain.setValueAtTime(0, t); g.gain.setTargetAtTime(0.11, t, 2.5);
+    f.connect(g).connect(bus);
+    const oscs = [];
+    chord.forEach((fr, i) => ['triangle', 'sine'].forEach((type, k) => {
+      const o = ctx.createOscillator(); o.type = type; o.frequency.value = fr * (k ? 2 : 1); o.detune.value = (i % 2 ? 5 : -5) + k * 3;
+      const og = ctx.createGain(); og.gain.value = k ? 0.05 : 0.11; o.connect(og).connect(f); o.start(t); oscs.push(o);
+    }));
+    return { f, g, oscs };
+  }
+  function dropPad(pad, after) {
+    const t = A.ctx.currentTime; pad.g.gain.cancelScheduledValues(t); pad.g.gain.setTargetAtTime(0, t, after);
+    pad.oscs.forEach(o => o.stop(t + after * 6));
+  }
+  function thump(t, s) {
+    const { ctx, bus } = A, o = ctx.createOscillator(), g = ctx.createGain();
+    o.frequency.setValueAtTime(68, t); o.frequency.exponentialRampToValueAtTime(36, t + .2);
+    g.gain.setValueAtTime(.0001, t); g.gain.exponentialRampToValueAtTime(.35 * s, t + .012); g.gain.exponentialRampToValueAtTime(.0001, t + .32);
+    o.connect(g).connect(bus); o.start(t); o.stop(t + .35);
+  }
+  function bell(t, fr, v) {
+    const { ctx, bus } = A, o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'sine'; o.frequency.value = fr;
+    g.gain.setValueAtTime(.0001, t); g.gain.exponentialRampToValueAtTime(v, t + .008); g.gain.exponentialRampToValueAtTime(.0001, t + 2.2);
+    o.connect(g).connect(bus); o.start(t); o.stop(t + 2.3);
+  }
+  function boom(chord) {
+    const { ctx, bus } = A, t = ctx.currentTime;
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.frequency.setValueAtTime(60, t); o.frequency.exponentialRampToValueAtTime(30, t + 2.6);
+    g.gain.setValueAtTime(.0001, t); g.gain.exponentialRampToValueAtTime(.45, t + .08); g.gain.exponentialRampToValueAtTime(.0001, t + 3.2);
+    o.connect(g).connect(bus); o.start(t); o.stop(t + 3.3);
+    // 활짝 열리는 화음
+    const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.setValueAtTime(6000, t); f.frequency.setTargetAtTime(1600, t + .8, 5);
+    const pg = ctx.createGain(); pg.gain.setValueAtTime(.0001, t); pg.gain.exponentialRampToValueAtTime(.22, t + .03); pg.gain.setTargetAtTime(0, t + 1, 6);
+    f.connect(pg).connect(bus);
+    chord.forEach((fr, i) => [1, 2].forEach(m => {
+      const v = ctx.createOscillator(); v.type = 'sawtooth'; v.frequency.value = fr * m; v.detune.value = (i % 2 ? 7 : -7);
+      const vg = ctx.createGain(); vg.gain.value = .035; v.connect(vg).connect(f); v.start(t); v.stop(t + 30);
+    }));
+  }
+
+  // ---------- 연출 ----------
+  let cur = null, nxt = null, started = false, t0 = performance.now();
+  let FL = 0, DK = 0, MX = 0;
+  const lineEl = document.getElementById('line');
+  function say(text) { lineEl.textContent = text; lineEl.classList.add('on'); setTimeout(() => lineEl.classList.remove('on'), 8000); }
+
+  cur = makeScene(0); cur.E = 0.35; // 시작 전에는 조용한 미리보기
+
+  function direct(t) {
+    if (!started) return;
+    const s = cur, local = t - s.start, silenceAt = s.dropT - 1.3;
+    if (local < silenceAt) {
+      const b = Math.min(1, Math.max(0, (local - 4) / (silenceAt - 4)));
+      s.E = 0.12 + 0.55 * Math.pow(b * b * (3 - 2 * b), 1.3);
+      DK = 0; s.build = b;
+    } else if (local < s.dropT) {
+      if (!s.silenced) { s.silenced = true; if (A) { const tt = A.ctx.currentTime; A.master.gain.setTargetAtTime(0.35, tt, .25); A.riseG.gain.setTargetAtTime(0, tt, .2); } }
+      DK = Math.min(.22, (local - silenceAt) / 1.3 * .3);
+      s.build = 1;
+    } else {
+      if (!s.dropped) {
+        s.dropped = true; s.build = 0;
+        if (A) { const tt = A.ctx.currentTime; A.master.gain.cancelScheduledValues(tt); A.master.gain.setTargetAtTime(.85, tt, .15); boom(SCENES[s.id].pad); A.bellRate = 1; A.nextBell = tt + .4; }
+        setTimeout(() => say(nextLine()), 1600);
+      }
+      const k = local - s.dropT;
+      FL = Math.max(0, .22 * (1 - k / 3)) * (reduce ? .4 : 1);
+      DK = 0;
+      s.E = .62 + .38 * Math.exp(-k / 6);
+    }
+    // 다음 장면으로 스며들기
+    if (local > s.dur - 10 && !s.crossing) {
+      s.crossing = true; nxt = makeScene(t);
+      if (A) { const old = A.pad; A.pad = makePad(SCENES[nxt.id].pad); if (old) dropPad(old, 3); }
+    }
+    if (nxt) {
+      MX = Math.min(1, (t - nxt.start) / 10);
+      if (MX >= 1) { cur = nxt; nxt = null; MX = 0; }
+    }
+  }
+
+  function audioTick() {
+    if (!A) return;
+    const s = cur, t = A.ctx.currentTime;
+    if (A.pad) A.pad.f.frequency.setTargetAtTime(300 + s.E * 2800, t, .3);
+    const b = s.build || 0;
+    if (!s.silenced) {
+      A.riseG.gain.setTargetAtTime(b * b * .07, t, .3);
+      A.riseF.frequency.setTargetAtTime(400 + b * 5000, t, .3);
+      if (b > .25 && t >= A.nextBeat) { thump(t + .02, .15 + b * .35); thump(t + .25, .1 + b * .25); A.nextBeat = t + 1.2 - b * .6; }
+    }
+    if (A.bellRate > .02 && t >= A.nextBell) {
+      const bells = SCENES[s.id].bells;
+      bell(t + .01, bells[(Math.random() * bells.length) | 0], .05 * A.bellRate + .012);
+      A.nextBell = t + .18 / A.bellRate + Math.random() * .3;
+      A.bellRate *= .965;
+    }
+  }
+
+  // ---------- 시작: 한 번의 터치 ----------
+  const door = document.getElementById('door');
+  door.addEventListener('click', () => {
+    if (started) return;
+    try { audioInit(); } catch (e) { A = null; }
+    started = true;
+    const t = (performance.now() - t0) / 1000;
+    const keep = cur; cur = makeScene(t); cur.q = keep.q; cur.id = keep.id; lastScene = keep.id;
+    if (A) { A.pad = makePad(SCENES[cur.id].pad); A.nextBeat = A.ctx.currentTime + 1; }
+    door.style.opacity = 0; setTimeout(() => door.hidden = true, 2000);
+    try { navigator.wakeLock && navigator.wakeLock.request('screen').catch(() => {}); } catch (e) {}
+  });
+  // 더블클릭하면 전체 화면 (보이는 버튼은 두지 않는다)
+  addEventListener('dblclick', () => {
+    try { document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen().catch(() => {}); } catch (e) {}
+  });
+  let idleTimer; addEventListener('pointermove', () => { document.body.classList.remove('idle'); clearTimeout(idleTimer); idleTimer = setTimeout(() => document.body.classList.add('idle'), 2000); });
+
+  // ---------- 루프 ----------
+  let slow = 0, frames = 0, last = performance.now();
+  function frame(now) {
+    const dt = now - last; last = now;
+    if (++frames > 30 && scale > 1) { slow = slow * .95 + (dt > 26 ? 1 : 0) * .05; if (slow > .6) { scale = Math.max(1, scale - .25); size(); slow = 0; } }
+    const t = (now - t0) / 1000;
+    direct(t); audioTick();
+    gl.uniform2f(U.R, cv.width, cv.height);
+    gl.uniform1f(U.T, t * (reduce ? .5 : 1));
+    gl.uniform1f(U.SA, cur.id); gl.uniform1f(U.EA, cur.E); gl.uniform3fv(U.QA, cur.q);
+    gl.uniform1f(U.SB, nxt ? nxt.id : 0); gl.uniform1f(U.EB, nxt ? nxt.E : 0); gl.uniform3fv(U.QB, nxt ? nxt.q : [0, 0, 0]);
+    gl.uniform1f(U.MX, MX); gl.uniform1f(U.FL, FL); gl.uniform1f(U.DK, DK);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
